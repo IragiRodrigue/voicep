@@ -1,25 +1,97 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { Mail, Lock, ArrowRight } from 'lucide-react-native';
+import { supabase } from '@/services/supabase';
+import { Mail, Lock, ArrowRight, AlertCircle, CheckCircle, Eye, EyeOff } from 'lucide-react-native';
 
 export default function SignInScreen() {
   const router = useRouter();
   const { signIn, loading, error, clearError } = useAuthStore();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<{email?: string; password?: string}>({});
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    setValidationErrors({});
+    clearError();
+  }, [email, password]);
+
+  const validateForm = (): boolean => {
+    const errors: {email?: string; password?: string} = {};
+
+    if (!email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      errors.email = 'Please enter a valid email address';
+    }
+
+    if (!password) {
+      errors.password = 'Password is required';
+    } else if (password.length < 6) {
+      errors.password = 'Password must be at least 6 characters';
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const handleSignIn = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please enter email and password');
-      return;
-    }
+    if (!validateForm()) return;
+
     await signIn(email, password);
-    if (error) {
-      Alert.alert('Sign In Failed', error);
+
+    // Check if user has a profile
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (!profile) {
+        await supabase
+          .from('user_profiles')
+          .insert({
+            id: user.id,
+            email: user.email || email,
+            display_name: email.split('@')[0]
+          });
+      }
     }
+
+    setSuccess(true);
   };
+
+  const getErrorMessage = (err: string): string => {
+    if (err.includes('Invalid login credentials')) {
+      return 'Invalid email or password. Please check your credentials and try again.';
+    }
+    if (err.includes('Email not confirmed')) {
+      return 'Please check your email and click the confirmation link before signing in.';
+    }
+    if (err.includes('Too many requests')) {
+      return 'Too many login attempts. Please wait a few minutes and try again.';
+    }
+    if (err.includes('network') || err.includes('fetch')) {
+      return 'Network error. Please check your internet connection and try again.';
+    }
+    return err || 'An unexpected error occurred. Please try again.';
+  };
+
+  if (success) {
+    return (
+      <View style={styles.successContainer}>
+        <CheckCircle color="#16a34a" size={64} />
+        <Text style={styles.successTitle}>Welcome back!</Text>
+        <Text style={styles.successText}>Signing you in...</Text>
+        <ActivityIndicator size="large" color="#2563eb" style={styles.loader} />
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -41,56 +113,79 @@ export default function SignInScreen() {
           </Text>
         </View>
 
+        {error && (
+          <View style={styles.errorBanner}>
+            <AlertCircle color="#ef4444" size={20} />
+            <Text style={styles.errorBannerText}>{getErrorMessage(error)}</Text>
+          </View>
+        )}
+
         <View style={styles.form}>
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, validationErrors.email && styles.inputError]}>
             <Mail color="#6b7280" size={20} style={styles.inputIcon} />
             <TextInput
               style={styles.input}
               placeholder="Email address"
               placeholderTextColor="#9ca3af"
               value={email}
-              onChangeText={(text) => {
-                setEmail(text);
-                clearError();
-              }}
+              onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete="email"
             />
           </View>
+          {validationErrors.email && (
+            <Text style={styles.fieldError}>{validationErrors.email}</Text>
+          )}
 
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, validationErrors.password && styles.inputError]}>
             <Lock color="#6b7280" size={20} style={styles.inputIcon} />
             <TextInput
               style={styles.input}
               placeholder="Password"
               placeholderTextColor="#9ca3af"
               value={password}
-              onChangeText={(text) => {
-                setPassword(text);
-                clearError();
-              }}
-              secureTextEntry
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
               autoCapitalize="none"
+              autoComplete="password"
             />
+            <TouchableOpacity
+              onPress={() => setShowPassword(!showPassword)}
+              style={styles.eyeButton}
+            >
+              {showPassword ? (
+                <EyeOff color="#6b7280" size={20} />
+              ) : (
+                <Eye color="#6b7280" size={20} />
+              )}
+            </TouchableOpacity>
           </View>
+          {validationErrors.password && (
+            <Text style={styles.fieldError}>{validationErrors.password}</Text>
+          )}
 
           <TouchableOpacity
             style={styles.forgotPassword}
-            onPress={() => Alert.alert('Reset Password', 'Password reset link has been sent to your email.')}
+            onPress={() => Alert.alert('Reset Password', 'Password reset coming soon.')}
           >
             <Text style={styles.forgotPasswordText}>Forgot password?</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.button, styles.primaryButton, loading && styles.buttonDisabled]}
+            style={[styles.button, loading && styles.buttonDisabled]}
             onPress={handleSignIn}
             disabled={loading}
           >
-            <Text style={styles.buttonText}>
-              {loading ? 'Signing in...' : 'Sign In'}
-            </Text>
-            <ArrowRight color="#ffffff" size={20} />
+            {loading ? (
+              <ActivityIndicator color="#ffffff" size="small" />
+            ) : (
+              <>
+                <Text style={styles.buttonText}>Sign In</Text>
+                <ArrowRight color="#ffffff" size={20} />
+              </>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -102,6 +197,7 @@ export default function SignInScreen() {
         </View>
 
         <View style={styles.disclaimer}>
+          <AlertCircle color="#d97706" size={16} />
           <Text style={styles.disclaimerText}>
             By signing in, you agree to use voice models ethically.
             Impersonation without consent is prohibited.
@@ -123,7 +219,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: {
-    marginBottom: 40,
+    marginBottom: 32,
   },
   logoContainer: {
     marginBottom: 32,
@@ -151,6 +247,23 @@ const styles = StyleSheet.create({
     color: '#64748b',
     lineHeight: 24,
   },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 20,
+    gap: 10,
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#991b1b',
+    fontSize: 14,
+    lineHeight: 20,
+  },
   form: {
     marginBottom: 24,
   },
@@ -161,9 +274,19 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginBottom: 16,
+    marginBottom: 4,
     paddingHorizontal: 16,
     height: 56,
+  },
+  inputError: {
+    borderColor: '#ef4444',
+    borderWidth: 2,
+  },
+  fieldError: {
+    color: '#ef4444',
+    fontSize: 13,
+    marginBottom: 12,
+    marginLeft: 4,
   },
   inputIcon: {
     marginRight: 12,
@@ -173,9 +296,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1e293b',
   },
+  eyeButton: {
+    padding: 4,
+  },
   forgotPassword: {
     alignSelf: 'flex-end',
-    marginBottom: 24,
+    marginBottom: 20,
+    marginTop: 8,
   },
   forgotPasswordText: {
     color: '#2563eb',
@@ -189,12 +316,10 @@ const styles = StyleSheet.create({
     height: 56,
     borderRadius: 12,
     gap: 8,
-  },
-  primaryButton: {
     backgroundColor: '#2563eb',
   },
   buttonDisabled: {
-    opacity: 0.6,
+    opacity: 0.7,
   },
   buttonText: {
     color: '#ffffff',
@@ -218,15 +343,39 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   disclaimer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: '#fef3c7',
-    borderRadius: 8,
-    padding: 12,
+    borderRadius: 12,
+    padding: 14,
     marginTop: 'auto',
+    gap: 10,
   },
   disclaimerText: {
+    flex: 1,
     color: '#92400e',
-    fontSize: 12,
-    textAlign: 'center',
+    fontSize: 13,
     lineHeight: 18,
+  },
+  successContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    padding: 24,
+  },
+  successTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1e293b',
+    marginTop: 16,
+  },
+  successText: {
+    fontSize: 16,
+    color: '#64748b',
+    marginTop: 8,
+  },
+  loader: {
+    marginTop: 24,
   },
 });

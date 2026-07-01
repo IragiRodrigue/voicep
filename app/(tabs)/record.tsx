@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Dimensions, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { useVoiceStore } from '@/stores/useVoiceStore';
-import { Mic, Square, Pause, Play, Trash2, Upload, Info, CheckCircle } from 'lucide-react-native';
+import { Mic, Square, Pause, Play, Trash2, Upload, Info, CheckCircle, AlertCircle, Check, X } from 'lucide-react-native';
 import { AUDIO_CONFIG } from '@/constants/audioConfig';
 
 const { width } = Dimensions.get('window');
@@ -15,9 +15,11 @@ function formatDuration(seconds: number): string {
 }
 
 export default function RecordScreen() {
-  const { uploadSample, loading, samples } = useVoiceStore();
+  const { uploadSample, loading, error, clearError } = useVoiceStore();
   const [recordings, setRecordings] = useState<{ uri: string; duration: number }[]>([]);
   const [selectedForUpload, setSelectedForUpload] = useState<Set<number>>(new Set());
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
 
   const {
     isRecording,
@@ -77,31 +79,57 @@ export default function RecordScreen() {
   };
 
   const handleUpload = async () => {
+    clearError();
     const toUpload = recordings.filter((_, i) => selectedForUpload.has(i));
     if (toUpload.length === 0) {
       Alert.alert('Select Recordings', 'Please select recordings to upload.');
       return;
     }
 
+    setUploadStatus('uploading');
+    setUploadProgress({ current: 0, total: toUpload.length });
+
     let successCount = 0;
-    for (const recording of toUpload) {
+    let failCount = 0;
+
+    for (let i = 0; i < toUpload.length; i++) {
+      setUploadProgress({ current: i + 1, total: toUpload.length });
+
+      const recording = toUpload[i];
       const result = await uploadSample({
         uri: recording.uri,
-        name: `sample_${Date.now()}.wav`,
+        name: `sample_${Date.now()}_${i}.wav`,
         duration: recording.duration,
-        size: recording.duration * 48000 * 2 // approximate size
+        size: recording.duration * 48000 * 2
       });
-      if (result) successCount++;
+
+      if (result) {
+        successCount++;
+      } else {
+        failCount++;
+      }
     }
 
-    Alert.alert(
-      'Upload Complete',
-      `Successfully uploaded ${successCount} of ${toUpload.length} recordings.`
-    );
+    setUploadProgress(null);
 
-    // Remove uploaded recordings
-    setRecordings(prev => prev.filter((_, i) => !selectedForUpload.has(i)));
-    setSelectedForUpload(new Set());
+    if (failCount === 0) {
+      setUploadStatus('success');
+      Alert.alert(
+        'Upload Complete',
+        `Successfully uploaded ${successCount} recording${successCount > 1 ? 's' : ''}.`,
+        [{ text: 'OK', onPress: () => setUploadStatus('idle') }]
+      );
+      // Remove uploaded recordings
+      setRecordings(prev => prev.filter((_, i) => !selectedForUpload.has(i)));
+      setSelectedForUpload(new Set());
+    } else {
+      setUploadStatus('error');
+      Alert.alert(
+        'Upload Partially Failed',
+        `${successCount} succeeded, ${failCount} failed. Please check your connection and try again.`,
+        [{ text: 'OK', onPress: () => setUploadStatus('idle') }]
+      );
+    }
   };
 
   useEffect(() => {
@@ -225,7 +253,7 @@ export default function RecordScreen() {
           <View style={styles.recordingsSection}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Recordings ({recordings.length})</Text>
-              {selectedForUpload.size > 0 && (
+              {selectedForUpload.size > 0 && uploadStatus !== 'uploading' && (
                 <TouchableOpacity style={styles.uploadButton} onPress={handleUpload}>
                   <Upload color="#2563eb" size={16} />
                   <Text style={styles.uploadButtonText}>
@@ -234,6 +262,35 @@ export default function RecordScreen() {
                 </TouchableOpacity>
               )}
             </View>
+
+            {/* Upload Progress */}
+            {uploadStatus === 'uploading' && uploadProgress && (
+              <View style={styles.uploadProgressBox}>
+                <ActivityIndicator size="small" color="#2563eb" />
+                <Text style={styles.uploadProgressText}>
+                  Uploading {uploadProgress.current} of {uploadProgress.total}...
+                </Text>
+              </View>
+            )}
+
+            {/* Error Message */}
+            {error && (
+              <View style={styles.errorBox}>
+                <AlertCircle color="#ef4444" size={16} />
+                <Text style={styles.errorText}>{error}</Text>
+                <TouchableOpacity onPress={clearError}>
+                  <X color="#94a3b8" size={16} />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Success Message */}
+            {uploadStatus === 'success' && (
+              <View style={styles.successBox}>
+                <Check color="#16a34a" size={16} />
+                <Text style={styles.successText}>Upload complete!</Text>
+              </View>
+            )}
 
             {recordings.map((recording, index) => (
               <TouchableOpacity
@@ -491,6 +548,50 @@ const styles = StyleSheet.create({
     color: '#2563eb',
     fontWeight: '600',
     fontSize: 14,
+  },
+  uploadProgressBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    gap: 10,
+  },
+  uploadProgressText: {
+    color: '#2563eb',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fef2f2',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+  },
+  errorText: {
+    flex: 1,
+    color: '#ef4444',
+    fontSize: 14,
+  },
+  successBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    gap: 10,
+  },
+  successText: {
+    color: '#16a34a',
+    fontSize: 14,
+    fontWeight: '500',
   },
   recordingItem: {
     flexDirection: 'row',
