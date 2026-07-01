@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { supabase } from '@/services/supabase';
+import * as FileSystem from 'expo-file-system';
 
 interface VoiceModel {
   id: string;
@@ -132,7 +133,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
           consent_id: data.consentId,
           consent_hash: data.consentHash,
           status: 'pending'
-        } as unknown as Record<string, unknown>)
+        })
         .select()
         .single();
 
@@ -180,7 +181,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
         .update({
           status: 'revoked',
           revoked_at: new Date().toISOString()
-        } as unknown as Record<string, unknown>)
+        })
         .eq('id', modelId);
 
       if (error) throw error;
@@ -217,18 +218,49 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
   uploadSample: async (file) => {
     set({ loading: true, error: null });
     try {
-      const { data: sample, error } = await supabase
+      // Get current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) throw new Error('Not authenticated');
+
+      // Read file as base64
+      const base64 = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      // Generate unique filename
+      const fileExt = file.name.split('.').pop() || 'wav';
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `${user.id}/${fileName}`;
+
+      // Upload to storage
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('voice-samples')
+        .upload(filePath, decode(base64), {
+          contentType: 'audio/wav',
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Get public URL (private bucket, but we can generate a signed URL later)
+      const { data: urlData } = supabase.storage
+        .from('voice-samples')
+        .getPublicUrl(filePath);
+
+      // Insert record in database
+      const { data: sample, error: dbError } = await supabase
         .from('voice_samples')
         .insert({
-          file_url: file.uri,
+          file_url: urlData.publicUrl || filePath,
           file_name: file.name,
           duration_seconds: file.duration,
-          file_size_bytes: file.size
-        } as unknown as Record<string, unknown>)
+          file_size_bytes: file.size,
+          user_id: user.id
+        })
         .select()
         .single();
 
-      if (error) throw error;
+      if (dbError) throw dbError;
 
       set(state => ({
         samples: [sample as VoiceSample, ...state.samples],
@@ -237,6 +269,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
 
       return sample as VoiceSample;
     } catch (error) {
+      console.error('Upload error:', error);
       set({ error: (error as Error).message, loading: false });
       return null;
     }
@@ -245,6 +278,22 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
   deleteSample: async (sampleId: string) => {
     set({ loading: true, error: null });
     try {
+      // Get sample to find file path
+      const { data: sample, error: fetchError } = await supabase
+        .from('voice_samples')
+        .select('file_url')
+        .eq('id', sampleId)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      // Delete from storage if file exists
+      if (sample?.file_url) {
+        const path = sample.file_url.split('/').slice(-2).join('/');
+        await supabase.storage.from('voice-samples').remove([path]);
+      }
+
+      // Delete from database
       const { error } = await supabase
         .from('voice_samples')
         .delete()
@@ -265,7 +314,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
     try {
       const { error } = await supabase
         .from('voice_samples')
-        .update({ voice_model_id: modelId } as unknown as Record<string, unknown>)
+        .update({ voice_model_id: modelId })
         .eq('id', sampleId);
 
       if (error) throw error;
@@ -316,7 +365,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
           consent_text_hash: data.consentTextHash,
           voice_model_id: data.modelId || null,
           signature: data.signature || null
-        } as unknown as Record<string, unknown>)
+        })
         .select()
         .single();
 
@@ -338,7 +387,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
           revoked: true,
           revoked_at: new Date().toISOString(),
           revocation_reason: reason
-        } as unknown as Record<string, unknown>)
+        })
         .eq('id', consentId);
 
       if (error) throw error;
@@ -359,3 +408,20 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
     error: null
   })
 }));
+
+// Helper function to decode base64
+function decode(base64: string): ArrayBuffer {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+// If atob is not available (React Native), use this polyfill
+if (typeof atob === 'undefined') {
+  (global as any).atob = (str: string) => {
+    return Buffer.from(str, 'base64').toString('binary');
+  };
+}

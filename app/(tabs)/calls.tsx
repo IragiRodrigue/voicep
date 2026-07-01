@@ -4,11 +4,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { supabase } from '@/services/supabase';
 import type { CallLog, Contact } from '@/services/callService';
-import { Phone, UserPlus, Clock, PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, ChevronRight, X, Check } from 'lucide-react-native';
+import { Phone, UserPlus, Clock, PhoneIncoming, PhoneOutgoing, PhoneMissed, Search, X, Check } from 'lucide-react-native';
 
 interface UserProfile {
   id: string;
   email: string;
+  display_name: string | null;
 }
 
 interface ContactWithProfile extends Contact {
@@ -16,7 +17,7 @@ interface ContactWithProfile extends Contact {
 }
 
 interface CallLogWithProfile extends CallLog {
-  otherUserEmail?: string;
+  otherUser?: UserProfile;
 }
 
 export default function CallsScreen() {
@@ -28,10 +29,34 @@ export default function CallsScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddContact, setShowAddContact] = useState(false);
   const [newContactEmail, setNewContactEmail] = useState('');
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
 
   useEffect(() => {
-    fetchData();
+    init();
   }, []);
+
+  const init = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      // Fetch or create profile
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+
+      if (profile) {
+        setCurrentUser(profile as UserProfile);
+      } else {
+        // Profile should be auto-created, but if not:
+        await supabase
+          .from('user_profiles')
+          .insert({ id: user.id, email: user.email || '' });
+        setCurrentUser({ id: user.id, email: user.email || '', display_name: null });
+      }
+    }
+    await fetchData();
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -52,7 +77,15 @@ export default function CallsScreen() {
 
       const { data: contactsData, error } = await supabase
         .from('contacts')
-        .select('*')
+        .select(`
+          id,
+          user_id,
+          contact_user_id,
+          status,
+          display_name,
+          created_at,
+          updated_at
+        `)
         .eq('user_id', user.id)
         .eq('status', 'accepted');
 
@@ -60,15 +93,17 @@ export default function CallsScreen() {
 
       // Fetch profiles for contacts
       const contactsWithProfiles = await Promise.all(
-        (contactsData || []).map(async (contact: Contact) => {
-          const { data: profile } = await supabase.auth.admin.getUserById(contact.contact_user_id);
+        (contactsData || []).map(async (contact) => {
+          const { data: profile } = await supabase
+            .from('user_profiles')
+            .select('id, email, display_name')
+            .eq('id', contact.contact_user_id)
+            .single();
+
           return {
             ...contact,
-            contactProfile: profile?.user ? {
-              id: profile.user.id,
-              email: profile.user.email || ''
-            } : undefined
-          };
+            contactProfile: profile || undefined
+          } as ContactWithProfile;
         })
       );
 
@@ -85,7 +120,7 @@ export default function CallsScreen() {
 
       const { data: logsData, error } = await supabase
         .from('call_logs')
-        .select('*')
+        .select('id, call_session_id, user_id, other_user_id, direction, duration_seconds, status, created_at, notes, quality_score')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(10);
@@ -93,12 +128,17 @@ export default function CallsScreen() {
       if (error) throw error;
 
       const logsWithProfiles = await Promise.all(
-        (logsData || []).map(async (log: CallLog) => {
-          const { data: profile } = await supabase.auth.admin.getUserById(log.other_user_id);
+        (logsData || []).map(async (log) => {
+          const { data: profile } = await supabase
+            .from('user_profiles')
+            .select('id, email, display_name')
+            .eq('id', log.other_user_id)
+            .single();
+
           return {
             ...log,
-            otherUserEmail: profile?.user?.email || 'Unknown'
-          };
+            otherUser: profile || undefined
+          } as CallLogWithProfile;
         })
       );
 
@@ -118,22 +158,41 @@ export default function CallsScreen() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Find user by email
+      // Find user by email in user_profiles
       const { data: users, error: searchError } = await supabase
-        .from('users')
-        .select('id')
-        .eq('email', newContactEmail.trim())
+        .from('user_profiles')
+        .select('id, email, display_name')
+        .ilike('email', newContactEmail.trim())
         .limit(1);
 
-      if (searchError || !users || users.length === 0) {
-        Alert.alert('Not Found', 'No user found with this email');
+      if (searchError) throw searchError;
+
+      if (!users || users.length === 0) {
+        Alert.alert('Not Found', 'No user found with this email. Make sure they have signed up first.');
         return;
       }
 
-      const contactUserId = users[0].id;
+      const contactUser = users[0];
 
-      if (contactUserId === user.id) {
+      if (contactUser.id === user.id) {
         Alert.alert('Error', 'You cannot add yourself as a contact');
+        return;
+      }
+
+      // Check if already a contact
+      const { data: existing } = await supabase
+        .from('contacts')
+        .select('id, status')
+        .eq('user_id', user.id)
+        .eq('contact_user_id', contactUser.id)
+        .maybeSingle();
+
+      if (existing) {
+        if (existing.status === 'accepted') {
+          Alert.alert('Already Added', 'This user is already in your contacts');
+        } else {
+          Alert.alert('Pending', 'A contact request already exists');
+        }
         return;
       }
 
@@ -142,26 +201,20 @@ export default function CallsScreen() {
         .from('contacts')
         .insert({
           user_id: user.id,
-          contact_user_id: contactUserId,
-          status: 'accepted'
+          contact_user_id: contactUser.id,
+          status: 'accepted',
+          display_name: contactUser.display_name || contactUser.email.split('@')[0]
         });
 
-      if (addError) {
-        if (addError.code === '23505') {
-          Alert.alert('Error', 'This user is already in your contacts');
-        } else {
-          throw addError;
-        }
-        return;
-      }
+      if (addError) throw addError;
 
       setNewContactEmail('');
       setShowAddContact(false);
-      fetchContacts();
+      await fetchContacts();
       Alert.alert('Success', 'Contact added successfully');
     } catch (error) {
       console.error('Failed to add contact:', error);
-      Alert.alert('Error', 'Failed to add contact');
+      Alert.alert('Error', 'Failed to add contact. Please try again.');
     }
   };
 
@@ -170,7 +223,7 @@ export default function CallsScreen() {
       pathname: '/call/outgoing',
       params: {
         contactId: contact.contact_user_id,
-        contactName: contact.contactProfile?.email || contact.display_name || 'Unknown'
+        contactName: contact.display_name || contact.contactProfile?.email || 'Unknown'
       }
     });
   };
@@ -200,6 +253,16 @@ export default function CallsScreen() {
     c.contactProfile?.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.display_name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  if (!currentUser) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -240,7 +303,8 @@ export default function CallsScreen() {
                 key={log.id || index}
                 style={styles.callLogItem}
                 onPress={() => {
-                  // Find contact and initiate call
+                  const contact = contacts.find(c => c.contact_user_id === log.other_user_id);
+                  if (contact) initiateCall(contact);
                 }}
               >
                 <View style={styles.callLogIcon}>
@@ -253,7 +317,9 @@ export default function CallsScreen() {
                   )}
                 </View>
                 <View style={styles.callLogInfo}>
-                  <Text style={styles.callLogName}>{log.otherUserEmail}</Text>
+                  <Text style={styles.callLogName}>
+                    {log.otherUser?.display_name || log.otherUser?.email || 'Unknown'}
+                  </Text>
                   <Text style={styles.callLogMeta}>
                     {formatTime(log.created_at)}. {formatDuration(log.duration_seconds)}
                   </Text>
@@ -274,6 +340,9 @@ export default function CallsScreen() {
               <Text style={styles.emptyText}>
                 {searchQuery ? 'No contacts found' : 'Add contacts to make voice calls'}
               </Text>
+              <Text style={styles.emptySubtext}>
+                Ask friends to sign up, then add their email
+              </Text>
             </View>
           ) : (
             filteredContacts.map((contact, index) => (
@@ -284,12 +353,12 @@ export default function CallsScreen() {
               >
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>
-                    {(contact.contactProfile?.email || contact.display_name || 'U')[0].toUpperCase()}
+                    {(contact.contactProfile?.display_name || contact.contactProfile?.email || 'U')[0].toUpperCase()}
                   </Text>
                 </View>
                 <View style={styles.contactInfo}>
                   <Text style={styles.contactName}>
-                    {contact.display_name || contact.contactProfile?.email || 'Unknown'}
+                    {contact.display_name || contact.contactProfile?.display_name || contact.contactProfile?.email || 'Unknown'}
                   </Text>
                   <Text style={styles.contactEmail}>{contact.contactProfile?.email}</Text>
                 </View>
@@ -316,14 +385,18 @@ export default function CallsScreen() {
                 <X color="#64748b" size={24} />
               </TouchableOpacity>
             </View>
+            <Text style={styles.modalHint}>
+              Enter your friend's email address. They must have signed up first.
+            </Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="Enter email address"
+              placeholder="email@example.com"
               placeholderTextColor="#9ca3af"
               value={newContactEmail}
               onChangeText={setNewContactEmail}
               keyboardType="email-address"
               autoCapitalize="none"
+              autoCorrect={false}
             />
             <TouchableOpacity style={styles.modalButton} onPress={handleAddContact}>
               <Check color="#ffffff" size={20} />
@@ -340,6 +413,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#64748b',
   },
   header: {
     flexDirection: 'row',
@@ -459,13 +541,20 @@ const styles = StyleSheet.create({
   },
   emptyState: {
     alignItems: 'center',
-    padding: 20,
+    padding: 30,
   },
   emptyText: {
-    fontSize: 15,
-    color: '#64748b',
+    fontSize: 16,
+    color: '#1e293b',
     textAlign: 'center',
     marginTop: 12,
+    fontWeight: '500',
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    marginTop: 8,
   },
   bottomSpace: {
     height: 100,
@@ -491,12 +580,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 12,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '600',
     color: '#1e293b',
+  },
+  modalHint: {
+    fontSize: 14,
+    color: '#64748b',
+    marginBottom: 16,
   },
   modalInput: {
     backgroundColor: '#f8fafc',

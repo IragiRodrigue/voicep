@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 
 export default function RootLayout() {
   useFrameworkReady();
-  const { initialized, initialize, user } = useAuthStore();
+  const { initialized, initialize } = useAuthStore();
 
   useEffect(() => {
     initialize();
@@ -24,9 +24,11 @@ export default function RootLayout() {
   return (
     <>
       <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(auth)" redirect={!!user} />
-        <Stack.Screen name="(tabs)" redirect={!user} />
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(tabs)" />
         <Stack.Screen name="model" />
+        <Stack.Screen name="call" />
         <Stack.Screen name="+not-found" />
       </Stack>
       <StatusBar style="auto" />
