@@ -1,14 +1,27 @@
+import { useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useVoiceStore } from '@/stores/useVoiceStore';
+import { useCallStore } from '@/stores/useCallStore';
 import { LogOut, User, Shield, Bell, HelpCircle, ChevronRight, Trash2, FileText, Info } from 'lucide-react-native';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user, signOut, loading } = useAuthStore();
   const { reset: resetVoiceData } = useVoiceStore();
+  const { subscribeToIncomingCalls, unsubscribeFromCalls } = useCallStore();
+
+  useEffect(() => {
+    if (user) {
+      // Subscribe to incoming calls when settings loads
+      subscribeToIncomingCalls(user.id);
+    }
+    return () => {
+      // Cleanup on unmount
+    };
+  }, [user]);
 
   const handleSignOut = async () => {
     Alert.alert(
@@ -20,6 +33,7 @@ export default function SettingsScreen() {
           text: 'Sign Out',
           style: 'destructive',
           onPress: async () => {
+            unsubscribeFromCalls();
             resetVoiceData();
             await signOut();
           }
