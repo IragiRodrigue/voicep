@@ -268,6 +268,11 @@ The app uses these exact versions for stability:
 - `consent_records` - Voice consent management
 - `training_jobs` - Model training status
 
+### Messaging Tables
+- `conversations` - Chat conversations
+- `conversation_participants` - Conversation members
+- `messages` - Chat messages with read status
+
 ### VoIP Tables
 - `contacts` - User contacts
 - `call_sessions` - Call records

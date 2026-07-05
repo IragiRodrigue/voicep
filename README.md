@@ -38,6 +38,13 @@
 - Noise gate
 - Preset effects (Deep, High, Ethereal)
 
+### Messaging
+- Real-time chat with contacts
+- Create conversations with any user by email
+- Message status (sent, delivered, read)
+- Unread message badges
+- Message timestamps and date separators
+
 ### VoIP Calls
 - Add contacts by email
 - Make voice calls with real-time effects
