@@ -1,195 +1,215 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, TextInput } from 'react-native';
+import {
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  ActivityIndicator, TextInput, Modal
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useMessagesStore, type ConversationWithDetails } from '@/stores/useMessagesStore';
-import { MessageCircle, Search, Plus, Send, User } from 'lucide-react-native';
+import { Search, SlidersHorizontal, Plus, MessageCircle, CheckCheck } from 'lucide-react-native';
 import { supabase } from '@/services/supabase';
+
+const BRAND = {
+  blue: '#3B6EE8',
+  blueLight: '#EEF2FD',
+  textPrimary: '#1A1D2E',
+  textSecondary: '#6B7A99',
+  bg: '#F5F7FB',
+  white: '#ffffff',
+  border: '#E4E9F2',
+};
+
+type TabType = 'All' | 'Unread' | 'Read';
 
 function formatTime(dateString: string): string {
   const date = new Date(dateString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
 
-  if (diffMins < 1) return 'now';
+  if (diffMins < 1) return 'Now';
   if (diffMins < 60) return `${diffMins}m`;
-  if (diffHours < 24) return `${diffHours}h`;
-  if (diffDays < 7) return `${diffDays}d`;
+  if (diffHours < 24) {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return date.toLocaleDateString([], { weekday: 'long' });
   return date.toLocaleDateString();
+}
+
+function AvatarCircle({ name }: { name: string }) {
+  const colors = ['#3B6EE8', '#E85C3B', '#3BCE3B', '#E8A03B', '#993BE8', '#3BE8D4'];
+  const index = name.charCodeAt(0) % colors.length;
+  return (
+    <View style={[styles.avatar, { backgroundColor: colors[index] }]}>
+      <Text style={styles.avatarText}>{name[0].toUpperCase()}</Text>
+    </View>
+  );
 }
 
 export default function MessagesScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const {
-    conversations,
-    loading,
-    error,
-    fetchConversations,
-    subscribeToConversations,
-    unsubscribeAll
+    conversations, loading, error,
+    fetchConversations, subscribeToConversations, unsubscribeAll
   } = useMessagesStore();
 
+  const [activeTab, setActiveTab] = useState<TabType>('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
   const [showNewChat, setShowNewChat] = useState(false);
   const [newChatEmail, setNewChatEmail] = useState('');
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState('');
 
   useEffect(() => {
     if (user) {
       fetchConversations(user.id);
       subscribeToConversations(user.id);
     }
-    return () => {
-      unsubscribeAll();
-    };
+    return () => { unsubscribeAll(); };
   }, [user]);
 
-  const filteredConversations = conversations.filter(c =>
-    c.other_user?.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.other_user?.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const getFilteredConversations = () => {
+    let list = conversations;
+    if (activeTab === 'Unread') list = list.filter(c => (c.unread_count ?? 0) > 0);
+    if (activeTab === 'Read') list = list.filter(c => (c.unread_count ?? 0) === 0 && c.last_message_preview);
+    if (searchQuery) {
+      list = list.filter(c =>
+        c.other_user?.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        c.other_user?.email.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    return list;
+  };
+
+  const unreadCount = conversations.filter(c => (c.unread_count ?? 0) > 0).length;
+  const filtered = getFilteredConversations();
 
   const handleStartNewChat = async () => {
     if (!user || !newChatEmail.trim()) return;
     setCreating(true);
-
+    setCreateError('');
     try {
-      // Find user by email
-      const { data: targetUser, error: userError } = await supabase
-        .from('user_profiles')
-        .select('id')
+      const { data: targetUser } = await supabase
+        .from('user_profiles').select('id')
         .eq('email', newChatEmail.trim().toLowerCase())
         .single();
 
-      if (userError || !targetUser) {
-        alert('User not found. Make sure they have a VocalForge account.');
+      if (!targetUser) {
+        setCreateError('User not found. Make sure they have a VocalForge account.');
         setCreating(false);
         return;
       }
-
       if (targetUser.id === user.id) {
-        alert('You cannot start a conversation with yourself.');
+        setCreateError('You cannot message yourself.');
         setCreating(false);
         return;
       }
 
-      // Create or get existing conversation
       const { createConversation } = useMessagesStore.getState();
-      const conversation = await createConversation(targetUser.id);
-
-      if (conversation) {
+      const conv = await createConversation(targetUser.id);
+      if (conv) {
         setShowNewChat(false);
         setNewChatEmail('');
-        // Navigate to chat
-        router.push(`/chat/${conversation.id}`);
+        router.push(`/chat/${conv.id}`);
       }
-    } catch (err) {
-      alert('Failed to start conversation. Please try again.');
+    } catch {
+      setCreateError('Failed to start conversation.');
     }
     setCreating(false);
   };
 
-  const renderConversation = ({ item }: { item: ConversationWithDetails }) => (
-    <TouchableOpacity
-      style={styles.conversationItem}
-      onPress={() => router.push(`/chat/${item.id}`)}
-    >
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>
-          {(item.other_user?.display_name || item.other_user?.email || '?')[0].toUpperCase()}
-        </Text>
-      </View>
-      <View style={styles.conversationContent}>
-        <View style={styles.conversationHeader}>
-          <Text style={styles.conversationName}>
-            {item.other_user?.display_name || item.other_user?.email?.split('@')[0] || 'Unknown'}
-          </Text>
-          <Text style={styles.conversationTime}>
-            {formatTime(item.last_message_at)}
-          </Text>
+  const renderItem = ({ item }: { item: ConversationWithDetails }) => {
+    const name = item.other_user?.display_name || item.other_user?.email?.split('@')[0] || 'Unknown';
+    const hasUnread = (item.unread_count ?? 0) > 0;
+
+    return (
+      <TouchableOpacity
+        style={styles.conversationRow}
+        onPress={() => router.push(`/chat/${item.id}`)}
+      >
+        <AvatarCircle name={name} />
+        <View style={styles.conversationBody}>
+          <View style={styles.conversationTop}>
+            <Text style={[styles.convName, hasUnread && styles.convNameBold]}>{name}</Text>
+            <Text style={[styles.convTime, hasUnread && styles.convTimeBold]}>
+              {formatTime(item.last_message_at)}
+            </Text>
+          </View>
+          <View style={styles.conversationBottom}>
+            <Text
+              style={[styles.convPreview, hasUnread && styles.convPreviewBold]}
+              numberOfLines={1}
+            >
+              {item.last_message_preview || 'Start a conversation'}
+            </Text>
+            {hasUnread ? (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadCount}>{item.unread_count}</Text>
+              </View>
+            ) : item.last_message_preview ? (
+              <CheckCheck color="#A0AABA" size={16} />
+            ) : null}
+          </View>
         </View>
-        <View style={styles.conversationFooter}>
-          <Text style={styles.conversationPreview} numberOfLines={1}>
-            {item.last_message_preview || 'No messages yet'}
-          </Text>
-          {item.unread_count && item.unread_count > 0 && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>{item.unread_count}</Text>
-            </View>
-          )}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Messages</Text>
-        <TouchableOpacity
-          style={styles.newChatButton}
-          onPress={() => setShowNewChat(true)}
-        >
-          <Plus color="#2563eb" size={24} />
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Messages</Text>
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.iconBtn} onPress={() => setShowSearch(!showSearch)}>
+            <Search color={BRAND.textPrimary} size={22} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconBtn}>
+            <SlidersHorizontal color={BRAND.textPrimary} size={22} />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Search */}
-      <View style={styles.searchContainer}>
-        <Search color="#94a3b8" size={20} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search conversations..."
-          placeholderTextColor="#94a3b8"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-      </View>
-
-      {/* New Chat Modal */}
-      {showNewChat && (
-        <View style={styles.newChatOverlay}>
-          <View style={styles.newChatCard}>
-            <Text style={styles.newChatTitle}>New Conversation</Text>
-            <TextInput
-              style={styles.newChatInput}
-              placeholder="Enter user email..."
-              placeholderTextColor="#94a3b8"
-              value={newChatEmail}
-              onChangeText={setNewChatEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-            <View style={styles.newChatButtons}>
-              <TouchableOpacity
-                style={styles.newChatCancel}
-                onPress={() => { setShowNewChat(false); setNewChatEmail(''); }}
-              >
-                <Text style={styles.newChatCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.newChatStart, creating && styles.newChatStartDisabled]}
-                onPress={handleStartNewChat}
-                disabled={creating}
-              >
-                {creating ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <>
-                    <Send color="#fff" size={18} />
-                    <Text style={styles.newChatStartText}>Start Chat</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
+      {/* Search bar */}
+      {showSearch && (
+        <View style={styles.searchWrapper}>
+          <Search color="#A0AABA" size={18} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search conversations..."
+            placeholderTextColor="#A0AABA"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoFocus
+          />
         </View>
       )}
+
+      {/* Tabs */}
+      <View style={styles.tabBar}>
+        {(['All', 'Unread', 'Read'] as TabType[]).map(tab => (
+          <TouchableOpacity
+            key={tab}
+            style={[styles.tab, activeTab === tab && styles.tabActive]}
+            onPress={() => setActiveTab(tab)}
+          >
+            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+              {tab}
+            </Text>
+            {tab === 'Unread' && unreadCount > 0 && (
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>{unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        ))}
+      </View>
 
       {/* Error */}
       {error && (
@@ -198,28 +218,88 @@ export default function MessagesScreen() {
         </View>
       )}
 
-      {/* Conversations List */}
+      {/* List */}
       {loading && conversations.length === 0 ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#2563eb" />
+        <View style={styles.loadingView}>
+          <ActivityIndicator size="large" color={BRAND.blue} />
         </View>
-      ) : filteredConversations.length === 0 ? (
-        <View style={styles.emptyState}>
-          <MessageCircle color="#d1d5db" size={64} />
-          <Text style={styles.emptyTitle}>No Conversations</Text>
+      ) : filtered.length === 0 ? (
+        <View style={styles.emptyView}>
+          <MessageCircle color="#CBD5E1" size={56} />
+          <Text style={styles.emptyTitle}>
+            {activeTab === 'All' ? 'No conversations yet' : `No ${activeTab.toLowerCase()} messages`}
+          </Text>
           <Text style={styles.emptyText}>
-            Start a new conversation by tapping the + button above.
+            {activeTab === 'All' ? 'Tap + to start a new chat' : 'Switch to All to see all messages'}
           </Text>
         </View>
       ) : (
         <FlatList
-          data={filteredConversations}
-          renderItem={renderConversation}
-          keyExtractor={(item) => item.id}
-          style={styles.list}
+          data={filtered}
+          renderItem={renderItem}
+          keyExtractor={item => item.id}
           showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingVertical: 8 }}
         />
       )}
+
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setShowNewChat(true)}
+      >
+        <Plus color="#ffffff" size={26} />
+      </TouchableOpacity>
+
+      {/* New Chat Modal */}
+      <Modal
+        visible={showNewChat}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowNewChat(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => { setShowNewChat(false); setNewChatEmail(''); setCreateError(''); }}
+        >
+          <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+            <Text style={styles.modalTitle}>New Conversation</Text>
+            <Text style={styles.modalSubtitle}>Enter the email address of the user</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="user@example.com"
+              placeholderTextColor="#A0AABA"
+              value={newChatEmail}
+              onChangeText={setNewChatEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoFocus
+            />
+            {createError ? (
+              <Text style={styles.modalError}>{createError}</Text>
+            ) : null}
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => { setShowNewChat(false); setNewChatEmail(''); setCreateError(''); }}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalStartBtn, (!newChatEmail.trim() || creating) && styles.modalStartBtnDisabled]}
+                onPress={handleStartNewChat}
+                disabled={!newChatEmail.trim() || creating}
+              >
+                {creating
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Text style={styles.modalStartText}>Start Chat</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -227,216 +307,290 @@ export default function MessagesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: BRAND.white,
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1e293b',
+  headerTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: BRAND.textPrimary,
   },
-  newChatButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#eff6ff',
+  headerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: BRAND.bg,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  searchContainer: {
+  searchWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    marginHorizontal: 20,
-    marginBottom: 16,
-    paddingHorizontal: 14,
+    backgroundColor: BRAND.bg,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    height: 44,
+    gap: 10,
   },
   searchInput: {
     flex: 1,
-    padding: 12,
-    fontSize: 16,
-    color: '#1e293b',
+    fontSize: 15,
+    color: BRAND.textPrimary,
+  },
+  tabBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: BRAND.border,
+  },
+  tab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    marginRight: 24,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    gap: 6,
+  },
+  tabActive: {
+    borderBottomColor: BRAND.blue,
+  },
+  tabText: {
+    fontSize: 15,
+    color: BRAND.textSecondary,
+    fontWeight: '500',
+  },
+  tabTextActive: {
+    color: BRAND.blue,
+    fontWeight: '700',
+  },
+  tabBadge: {
+    backgroundColor: BRAND.blue,
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  tabBadgeText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
   },
   errorBanner: {
     backgroundColor: '#fef2f2',
-    marginHorizontal: 20,
-    marginBottom: 16,
-    padding: 14,
-    borderRadius: 12,
+    margin: 16,
+    padding: 12,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#fecaca',
   },
   errorText: {
     color: '#ef4444',
-    fontSize: 14,
+    fontSize: 13,
   },
-  list: {
+  loadingView: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  conversationItem: {
+  emptyView: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingBottom: 80,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: BRAND.textPrimary,
+    marginTop: 16,
+  },
+  emptyText: {
+    fontSize: 14,
+    color: BRAND.textSecondary,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  conversationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    padding: 16,
-    marginHorizontal: 20,
-    marginBottom: 8,
-    borderRadius: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F4FC',
   },
   avatar: {
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: '#2563eb',
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
     color: '#ffffff',
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',
   },
-  conversationContent: {
+  conversationBody: {
     flex: 1,
     marginLeft: 14,
   },
-  conversationHeader: {
+  conversationTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 4,
   },
-  conversationName: {
+  convName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#1e293b',
+    fontWeight: '500',
+    color: BRAND.textPrimary,
   },
-  conversationTime: {
+  convNameBold: {
+    fontWeight: '700',
+  },
+  convTime: {
     fontSize: 12,
-    color: '#94a3b8',
+    color: BRAND.textSecondary,
   },
-  conversationFooter: {
+  convTimeBold: {
+    color: BRAND.blue,
+    fontWeight: '600',
+  },
+  conversationBottom: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  conversationPreview: {
+  convPreview: {
     flex: 1,
-    fontSize: 14,
-    color: '#64748b',
+    fontSize: 13,
+    color: BRAND.textSecondary,
     marginRight: 8,
   },
+  convPreviewBold: {
+    color: BRAND.textPrimary,
+    fontWeight: '500',
+  },
   unreadBadge: {
-    backgroundColor: '#2563eb',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    backgroundColor: BRAND.blue,
     borderRadius: 10,
     minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 6,
   },
-  unreadText: {
+  unreadCount: {
     color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '700',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1e293b',
-    marginTop: 16,
-  },
-  emptyText: {
-    fontSize: 15,
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 22,
-  },
-  newChatOverlay: {
+  fab: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    bottom: 24,
+    right: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: BRAND.blue,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 100,
+    shadowColor: BRAND.blue,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
   },
-  newChatCard: {
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
     backgroundColor: '#ffffff',
     borderRadius: 20,
     padding: 24,
-    width: '90%',
+    width: '100%',
     maxWidth: 400,
   },
-  newChatTitle: {
+  modalTitle: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#1e293b',
-    marginBottom: 16,
+    fontWeight: '800',
+    color: BRAND.textPrimary,
+    marginBottom: 4,
   },
-  newChatInput: {
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
+  modalSubtitle: {
+    fontSize: 14,
+    color: BRAND.textSecondary,
+    marginBottom: 20,
+  },
+  modalInput: {
+    backgroundColor: BRAND.bg,
     borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    color: '#1e293b',
-    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: BRAND.border,
+    paddingHorizontal: 14,
+    height: 50,
+    fontSize: 15,
+    color: BRAND.textPrimary,
+    marginBottom: 8,
   },
-  newChatButtons: {
+  modalError: {
+    color: '#ef4444',
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  modalButtons: {
     flexDirection: 'row',
     gap: 12,
+    marginTop: 8,
   },
-  newChatCancel: {
+  modalCancelBtn: {
     flex: 1,
-    padding: 14,
+    height: 48,
     borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#f1f5f9',
-  },
-  newChatCancelText: {
-    color: '#64748b',
-    fontWeight: '600',
-    fontSize: 16,
-  },
-  newChatStart: {
-    flex: 1,
-    flexDirection: 'row',
-    gap: 8,
-    padding: 14,
-    borderRadius: 12,
-    alignItems: 'center',
+    backgroundColor: BRAND.bg,
     justifyContent: 'center',
-    backgroundColor: '#2563eb',
+    alignItems: 'center',
   },
-  newChatStartDisabled: {
-    opacity: 0.7,
-  },
-  newChatStartText: {
-    color: '#ffffff',
+  modalCancelText: {
+    color: BRAND.textSecondary,
     fontWeight: '600',
-    fontSize: 16,
+    fontSize: 15,
+  },
+  modalStartBtn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: BRAND.blue,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalStartBtnDisabled: {
+    opacity: 0.6,
+  },
+  modalStartText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 15,
   },
 });

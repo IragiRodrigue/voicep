@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import {
+  View, Text, StyleSheet, TouchableOpacity, TextInput,
+  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Alert, Dimensions
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { supabase } from '@/services/supabase';
-import { Mail, Lock, ArrowRight, AlertCircle, CheckCircle, Eye, EyeOff } from 'lucide-react-native';
+import { Eye, EyeOff, AlertCircle } from 'lucide-react-native';
+
+const { height } = Dimensions.get('window');
 
 export default function SignInScreen() {
   const router = useRouter();
@@ -11,8 +16,7 @@ export default function SignInScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [validationErrors, setValidationErrors] = useState<{email?: string; password?: string}>({});
-  const [success, setSuccess] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<{ email?: string; password?: string }>({});
 
   useEffect(() => {
     setValidationErrors({});
@@ -20,113 +24,82 @@ export default function SignInScreen() {
   }, [email, password]);
 
   const validateForm = (): boolean => {
-    const errors: {email?: string; password?: string} = {};
-
-    if (!email.trim()) {
-      errors.email = 'Email is required';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      errors.email = 'Please enter a valid email address';
-    }
-
-    if (!password) {
-      errors.password = 'Password is required';
-    } else if (password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
-    }
-
+    const errors: { email?: string; password?: string } = {};
+    if (!email.trim()) errors.email = 'Email is required';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.email = 'Invalid email address';
+    if (!password) errors.password = 'Password is required';
+    else if (password.length < 6) errors.password = 'At least 6 characters';
     setValidationErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
   const handleSignIn = async () => {
     if (!validateForm()) return;
-
     await signIn(email, password);
-
-    // Check if user has a profile
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       const { data: profile } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .eq('id', user.id)
-        .maybeSingle();
-
+        .from('user_profiles').select('id').eq('id', user.id).maybeSingle();
       if (!profile) {
-        await supabase
-          .from('user_profiles')
-          .insert({
-            id: user.id,
-            email: user.email || email,
-            display_name: email.split('@')[0]
-          });
+        await supabase.from('user_profiles').insert({
+          id: user.id, email: user.email || email, display_name: email.split('@')[0]
+        });
       }
     }
-
-    setSuccess(true);
   };
 
-  const getErrorMessage = (err: string): string => {
-    if (err.includes('Invalid login credentials')) {
-      return 'Invalid email or password. Please check your credentials and try again.';
-    }
-    if (err.includes('Email not confirmed')) {
-      return 'Please check your email and click the confirmation link before signing in.';
-    }
-    if (err.includes('Too many requests')) {
-      return 'Too many login attempts. Please wait a few minutes and try again.';
-    }
-    if (err.includes('network') || err.includes('fetch')) {
-      return 'Network error. Please check your internet connection and try again.';
-    }
-    return err || 'An unexpected error occurred. Please try again.';
+  const getErrorMessage = (err: string) => {
+    if (err.includes('Invalid login credentials')) return 'Incorrect email or password.';
+    if (err.includes('Email not confirmed')) return 'Please verify your email first.';
+    if (err.includes('Too many requests')) return 'Too many attempts. Try again later.';
+    if (err.includes('network') || err.includes('fetch')) return 'Network error. Check your connection.';
+    return err || 'An error occurred. Please try again.';
   };
-
-  if (success) {
-    return (
-      <View style={styles.successContainer}>
-        <CheckCircle color="#16a34a" size={64} />
-        <Text style={styles.successTitle}>Welcome back!</Text>
-        <Text style={styles.successText}>Signing you in...</Text>
-        <ActivityIndicator size="large" color="#2563eb" style={styles.loader} />
-      </View>
-    );
-  }
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
+      style={styles.root}
     >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.header}>
-          <View style={styles.logoContainer}>
-            <Text style={styles.logoText}>VocalForge</Text>
-            <Text style={styles.tagline}>Transform Your Voice</Text>
-          </View>
-          <Text style={styles.welcomeBack}>Welcome back</Text>
-          <Text style={styles.subtitle}>
-            Sign in to continue creating voice models
-          </Text>
+      {/* Blue gradient background with floating shapes */}
+      <View style={styles.background}>
+        <View style={[styles.bubble, styles.bubble1]} />
+        <View style={[styles.bubble, styles.bubble2]} />
+        <View style={[styles.bubble, styles.bubble3]} />
+        <View style={[styles.bubble, styles.bubble4]} />
+        <View style={[styles.bubble, styles.bubble5]} />
+
+        <View style={styles.heroContent}>
+          <Text style={styles.appName}>VocalForge</Text>
+          <Text style={styles.heroSubtitle}>Transform Your Voice</Text>
         </View>
+      </View>
 
-        {error && (
-          <View style={styles.errorBanner}>
-            <AlertCircle color="#ef4444" size={20} />
-            <Text style={styles.errorBannerText}>{getErrorMessage(error)}</Text>
-          </View>
-        )}
+      {/* White card */}
+      <ScrollView
+        style={styles.cardScroll}
+        contentContainerStyle={styles.cardContent}
+        keyboardShouldPersistTaps="handled"
+        bounces={false}
+      >
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Welcome back</Text>
+          <Text style={styles.cardSubtitle}>Sign in to your account</Text>
 
-        <View style={styles.form}>
-          <View style={[styles.inputContainer, validationErrors.email && styles.inputError]}>
-            <Mail color="#6b7280" size={20} style={styles.inputIcon} />
+          {error && (
+            <View style={styles.errorBanner}>
+              <AlertCircle color="#ef4444" size={16} />
+              <Text style={styles.errorBannerText}>{getErrorMessage(error)}</Text>
+            </View>
+          )}
+
+          {/* Email */}
+          <Text style={styles.fieldLabel}>Email</Text>
+          <View style={[styles.inputWrapper, validationErrors.email && styles.inputWrapperError]}>
             <TextInput
-              style={styles.input}
-              placeholder="Email address"
-              placeholderTextColor="#9ca3af"
+              style={styles.textInput}
+              placeholder="Enter your email"
+              placeholderTextColor="#A0AABA"
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
@@ -139,243 +112,258 @@ export default function SignInScreen() {
             <Text style={styles.fieldError}>{validationErrors.email}</Text>
           )}
 
-          <View style={[styles.inputContainer, validationErrors.password && styles.inputError]}>
-            <Lock color="#6b7280" size={20} style={styles.inputIcon} />
+          {/* Password */}
+          <Text style={styles.fieldLabel}>Password</Text>
+          <View style={[styles.inputWrapper, validationErrors.password && styles.inputWrapperError]}>
             <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#9ca3af"
+              style={[styles.textInput, { flex: 1 }]}
+              placeholder="Enter your password"
+              placeholderTextColor="#A0AABA"
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
               autoComplete="password"
             />
-            <TouchableOpacity
-              onPress={() => setShowPassword(!showPassword)}
-              style={styles.eyeButton}
-            >
-              {showPassword ? (
-                <EyeOff color="#6b7280" size={20} />
-              ) : (
-                <Eye color="#6b7280" size={20} />
-              )}
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeBtn}>
+              {showPassword ? <EyeOff color="#A0AABA" size={18} /> : <Eye color="#A0AABA" size={18} />}
             </TouchableOpacity>
           </View>
           {validationErrors.password && (
             <Text style={styles.fieldError}>{validationErrors.password}</Text>
           )}
 
+          {/* Forgot password */}
           <TouchableOpacity
-            style={styles.forgotPassword}
-            onPress={() => Alert.alert('Reset Password', 'Password reset coming soon.')}
+            style={styles.forgotBtn}
+            onPress={() => Alert.alert('Reset Password', 'Password reset feature coming soon.')}
           >
-            <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+            <Text style={styles.forgotText}>Forgot password?</Text>
           </TouchableOpacity>
 
+          {/* Sign In Button */}
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
+            style={[styles.primaryBtn, loading && styles.primaryBtnDisabled]}
             onPress={handleSignIn}
             disabled={loading}
           >
-            {loading ? (
-              <ActivityIndicator color="#ffffff" size="small" />
-            ) : (
-              <>
-                <Text style={styles.buttonText}>Sign In</Text>
-                <ArrowRight color="#ffffff" size={20} />
-              </>
-            )}
+            {loading
+              ? <ActivityIndicator color="#ffffff" />
+              : <Text style={styles.primaryBtnText}>Sign In</Text>
+            }
           </TouchableOpacity>
-        </View>
 
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Don't have an account?</Text>
-          <TouchableOpacity onPress={() => router.push('/sign-up')}>
-            <Text style={styles.footerLink}>Create account</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.disclaimer}>
-          <AlertCircle color="#d97706" size={16} />
-          <Text style={styles.disclaimerText}>
-            By signing in, you agree to use voice models ethically.
-            Impersonation without consent is prohibited.
-          </Text>
+          {/* Footer */}
+          <View style={styles.footerRow}>
+            <Text style={styles.footerText}>Don't have an account? </Text>
+            <TouchableOpacity onPress={() => router.push('/sign-up')}>
+              <Text style={styles.footerLink}>Sign up</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
+const BRAND = {
+  blue: '#3B6EE8',
+  blueDark: '#1E3A8A',
+  blueMid: '#2952CB',
+  blueDeep: '#0F2680',
+  blueLight: '#6B93F0',
+  bubbleA: 'rgba(255,255,255,0.12)',
+  bubbleB: 'rgba(107,147,240,0.35)',
+  bubbleC: 'rgba(15,38,128,0.6)',
+};
+
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: BRAND.blue,
   },
-  scrollContent: {
-    flexGrow: 1,
-    padding: 24,
-    justifyContent: 'center',
+  background: {
+    height: height * 0.42,
+    backgroundColor: BRAND.blue,
+    overflow: 'hidden',
+    justifyContent: 'flex-end',
+    paddingBottom: 32,
+    paddingHorizontal: 28,
   },
-  header: {
-    marginBottom: 32,
+  bubble: {
+    position: 'absolute',
+    borderRadius: 999,
   },
-  logoContainer: {
-    marginBottom: 32,
+  bubble1: {
+    width: 180,
+    height: 180,
+    backgroundColor: BRAND.bubbleC,
+    top: -50,
+    right: -30,
   },
-  logoText: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: '#1e293b',
+  bubble2: {
+    width: 120,
+    height: 120,
+    backgroundColor: BRAND.bubbleA,
+    top: 30,
+    left: -20,
+  },
+  bubble3: {
+    width: 80,
+    height: 80,
+    backgroundColor: BRAND.bubbleB,
+    top: 80,
+    right: 60,
+  },
+  bubble4: {
+    width: 60,
+    height: 60,
+    backgroundColor: BRAND.bubbleC,
+    bottom: 60,
+    left: 40,
+  },
+  bubble5: {
+    width: 100,
+    height: 100,
+    backgroundColor: BRAND.bubbleA,
+    bottom: -20,
+    right: 20,
+  },
+  heroContent: {
+    zIndex: 10,
+  },
+  appName: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#ffffff',
     letterSpacing: -0.5,
   },
-  tagline: {
+  heroSubtitle: {
     fontSize: 16,
-    color: '#2563eb',
+    color: 'rgba(255,255,255,0.8)',
     marginTop: 4,
-    fontWeight: '500',
+    fontWeight: '400',
   },
-  welcomeBack: {
-    fontSize: 28,
-    fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 8,
+  cardScroll: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    marginTop: -20,
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#64748b',
-    lineHeight: 24,
+  cardContent: {
+    flexGrow: 1,
+    paddingBottom: 32,
+  },
+  card: {
+    padding: 28,
+  },
+  cardTitle: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: BRAND.blue,
+    marginBottom: 6,
+    marginTop: 8,
+  },
+  cardSubtitle: {
+    fontSize: 15,
+    color: '#6B7A99',
+    marginBottom: 24,
   },
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fef2f2',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+    gap: 8,
     borderWidth: 1,
     borderColor: '#fecaca',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 20,
-    gap: 10,
   },
   errorBannerText: {
     flex: 1,
-    color: '#991b1b',
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  form: {
-    marginBottom: 24,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 4,
-    paddingHorizontal: 16,
-    height: 56,
-  },
-  inputError: {
-    borderColor: '#ef4444',
-    borderWidth: 2,
-  },
-  fieldError: {
-    color: '#ef4444',
-    fontSize: 13,
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1e293b',
-  },
-  eyeButton: {
-    padding: 4,
-  },
-  forgotPassword: {
-    alignSelf: 'flex-end',
-    marginBottom: 20,
-    marginTop: 8,
-  },
-  forgotPasswordText: {
-    color: '#2563eb',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  button: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 56,
-    borderRadius: 12,
-    gap: 8,
-    backgroundColor: '#2563eb',
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 24,
-  },
-  footerText: {
-    color: '#64748b',
-    fontSize: 16,
-  },
-  footerLink: {
-    color: '#2563eb',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  disclaimer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fef3c7',
-    borderRadius: 12,
-    padding: 14,
-    marginTop: 'auto',
-    gap: 10,
-  },
-  disclaimerText: {
-    flex: 1,
-    color: '#92400e',
+    color: '#b91c1c',
     fontSize: 13,
     lineHeight: 18,
   },
-  successContainer: {
+  fieldLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  inputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F7FB',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E4E9F2',
+    paddingHorizontal: 14,
+    height: 52,
+    marginBottom: 4,
+  },
+  inputWrapperError: {
+    borderColor: '#ef4444',
+  },
+  textInput: {
+    fontSize: 15,
+    color: '#1A1D2E',
     flex: 1,
+  },
+  eyeBtn: {
+    padding: 4,
+  },
+  fieldError: {
+    color: '#ef4444',
+    fontSize: 12,
+    marginBottom: 8,
+    marginLeft: 2,
+  },
+  forgotBtn: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    marginBottom: 24,
+  },
+  forgotText: {
+    color: BRAND.blue,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  primaryBtn: {
+    backgroundColor: BRAND.blue,
+    height: 54,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    padding: 24,
+    shadowColor: BRAND.blue,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  successTitle: {
-    fontSize: 28,
+  primaryBtnDisabled: {
+    opacity: 0.7,
+  },
+  primaryBtnText: {
+    color: '#ffffff',
+    fontSize: 17,
     fontWeight: '700',
-    color: '#1e293b',
-    marginTop: 16,
+    letterSpacing: 0.3,
   },
-  successText: {
-    fontSize: 16,
-    color: '#64748b',
-    marginTop: 8,
-  },
-  loader: {
+  footerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
     marginTop: 24,
+  },
+  footerText: {
+    color: '#6B7A99',
+    fontSize: 14,
+  },
+  footerLink: {
+    color: BRAND.blue,
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
