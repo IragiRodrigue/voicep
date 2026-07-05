@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, TextInput, Modal, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useVoiceStore } from '@/stores/useVoiceStore';
 import { useCallStore } from '@/stores/useCallStore';
+import { useThemeStore } from '@/stores/useThemeStore';
 import { supabase } from '@/services/supabase';
-import { LogOut, User, Shield, Bell, HelpCircle, ChevronRight, Trash2, FileText, Info, X, Check, Mail, Database, Download } from 'lucide-react-native';
+import { LogOut, User, Shield, Bell, HelpCircle, ChevronRight, Trash2, FileText, Info, X, Check, Mail, Database, Download, Moon } from 'lucide-react-native';
 
 interface UserProfile {
   id: string;
@@ -20,6 +21,7 @@ export default function SettingsScreen() {
   const { user, signOut, loading } = useAuthStore();
   const { reset: resetVoiceData, models, samples } = useVoiceStore();
   const { subscribeToIncomingCalls, unsubscribeFromCalls } = useCallStore();
+  const { isDark, toggle: toggleDark } = useThemeStore();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
 
@@ -287,6 +289,27 @@ export default function SettingsScreen() {
             </View>
             <ChevronRight color="#cbd5e1" size={20} />
           </TouchableOpacity>
+        </View>
+
+        {/* Appearance Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Appearance</Text>
+
+          <View style={styles.menuItem}>
+            <View style={[styles.menuIcon, { backgroundColor: isDark ? '#1e3a8a' : '#f1f5f9' }]}>
+              <Moon color={isDark ? '#60a5fa' : '#64748b'} size={22} />
+            </View>
+            <View style={styles.menuContent}>
+              <Text style={styles.menuLabel}>Dark Mode</Text>
+              <Text style={styles.menuHint}>{isDark ? 'Currently dark theme' : 'Currently light theme'}</Text>
+            </View>
+            <Switch
+              value={isDark}
+              onValueChange={toggleDark}
+              trackColor={{ false: '#cbd5e1', true: '#2563eb' }}
+              thumbColor="#ffffff"
+            />
+          </View>
         </View>
 
         {/* About Section */}

@@ -28,6 +28,20 @@ export interface Message {
   deleted_at: string | null;
 }
 
+export interface MessageReaction {
+  id: string;
+  message_id: string;
+  user_id: string;
+  emoji: string;
+  created_at: string;
+}
+
+export interface ReactionSummary {
+  emoji: string;
+  count: number;
+  reactedByMe: boolean;
+}
+
 export interface ConversationWithDetails extends Conversation {
   participants: ConversationParticipant[];
   unread_count?: number;
@@ -41,17 +55,22 @@ export interface ConversationWithDetails extends Conversation {
 interface MessagesState {
   conversations: ConversationWithDetails[];
   messages: Message[];
+  reactions: Record<string, MessageReaction[]>;
   currentConversation: ConversationWithDetails | null;
   loading: boolean;
   error: string | null;
   subscription: ReturnType<typeof supabase.channel> | null;
+  reactionSubscription: ReturnType<typeof supabase.channel> | null;
 
   fetchConversations: (userId: string) => Promise<void>;
   fetchMessages: (conversationId: string) => Promise<void>;
+  fetchReactions: (conversationId: string) => Promise<void>;
   sendMessage: (conversationId: string, content: string) => Promise<Message | null>;
   createConversation: (otherUserId: string) => Promise<Conversation | null>;
   markAsRead: (conversationId: string) => Promise<void>;
+  toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   subscribeToMessages: (conversationId: string, onNewMessage?: (message: Message) => void) => void;
+  subscribeToReactions: (conversationId: string) => void;
   subscribeToConversations: (userId: string, onNewConversation?: () => void) => void;
   unsubscribeAll: () => void;
   setCurrentConversation: (conversation: ConversationWithDetails | null) => void;
@@ -62,15 +81,16 @@ interface MessagesState {
 export const useMessagesStore = create<MessagesState>((set, get) => ({
   conversations: [],
   messages: [],
+  reactions: {},
   currentConversation: null,
   loading: false,
   error: null,
   subscription: null,
+  reactionSubscription: null,
 
   fetchConversations: async (userId: string) => {
     set({ loading: true, error: null });
     try {
-      // Get all conversations where user is a participant
       const { data: participations, error: partError } = await supabase
         .from('conversation_participants')
         .select('conversation_id')
@@ -85,7 +105,6 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
       const conversationIds = participations.map(p => p.conversation_id);
 
-      // Fetch conversations
       const { data: conversations, error: convError } = await supabase
         .from('conversations')
         .select('*')
@@ -94,10 +113,8 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
       if (convError) throw convError;
 
-      // For each conversation, get participants and other user info
       const conversationsWithDetails: ConversationWithDetails[] = await Promise.all(
         (conversations || []).map(async (conv) => {
-          // Get participants
           const { data: participants } = await supabase
             .from('conversation_participants')
             .select('*, user_profiles!inner(id, display_name, email)')
@@ -106,7 +123,6 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
           const otherParticipant = participants?.find(p => p.user_id !== userId);
           const myParticipation = participants?.find(p => p.user_id === userId);
 
-          // Count unread messages
           let unreadCount = 0;
           if (myParticipation?.last_read_at) {
             const { count } = await supabase
@@ -155,11 +171,28 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
         .order('created_at', { ascending: true });
 
       if (error) throw error;
-
       set({ messages: messages || [], loading: false });
     } catch (error) {
       set({ error: (error as Error).message, loading: false });
     }
+  },
+
+  fetchReactions: async (conversationId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('message_reactions')
+        .select('*')
+        .in('message_id', get().messages.map(m => m.id));
+
+      if (error || !data) return;
+
+      const grouped: Record<string, MessageReaction[]> = {};
+      for (const r of data) {
+        if (!grouped[r.message_id]) grouped[r.message_id] = [];
+        grouped[r.message_id].push(r as MessageReaction);
+      }
+      set({ reactions: grouped });
+    } catch { /* silent */ }
   },
 
   sendMessage: async (conversationId: string, content: string) => {
@@ -170,19 +203,13 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
       const { data: message, error } = await supabase
         .from('messages')
-        .insert({
-          conversation_id: conversationId,
-          sender_id: user.id,
-          content
-        })
+        .insert({ conversation_id: conversationId, sender_id: user.id, content })
         .select()
         .single();
 
       if (error) throw error;
 
-      // Add to local messages
       set(state => ({ messages: [...state.messages, message as Message] }));
-
       return message as Message;
     } catch (error) {
       set({ error: (error as Error).message });
@@ -196,7 +223,6 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      // Check if conversation already exists between these users
       const { data: existingParticipations } = await supabase
         .from('conversation_participants')
         .select('conversation_id')
@@ -204,7 +230,6 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
       if (existingParticipations && existingParticipations.length > 0) {
         const convIds = existingParticipations.map(p => p.conversation_id);
-
         const { data: otherParticipations } = await supabase
           .from('conversation_participants')
           .select('conversation_id')
@@ -212,18 +237,15 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
           .in('conversation_id', convIds);
 
         if (otherParticipations && otherParticipations.length > 0) {
-          // Conversation exists, return it
           const { data: existingConv } = await supabase
             .from('conversations')
             .select('*')
             .eq('id', otherParticipations[0].conversation_id)
             .single();
-
           return existingConv as Conversation;
         }
       }
 
-      // Create new conversation
       const { data: conversation, error: convError } = await supabase
         .from('conversations')
         .insert({})
@@ -232,7 +254,6 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
 
       if (convError) throw convError;
 
-      // Add both participants
       await supabase.from('conversation_participants').insert([
         { conversation_id: conversation.id, user_id: user.id },
         { conversation_id: conversation.id, user_id: otherUserId }
@@ -256,15 +277,48 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
         .eq('conversation_id', conversationId)
         .eq('user_id', user.id);
 
-      // Update local unread count
       set(state => ({
         conversations: state.conversations.map(c =>
           c.id === conversationId ? { ...c, unread_count: 0 } : c
         )
       }));
-    } catch (error) {
-      console.error('Error marking as read:', error);
-    }
+    } catch { /* silent */ }
+  },
+
+  toggleReaction: async (messageId: string, emoji: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const currentReactions = get().reactions[messageId] || [];
+      const existing = currentReactions.find(r => r.user_id === user.id && r.emoji === emoji);
+
+      if (existing) {
+        // Remove reaction
+        await supabase.from('message_reactions').delete().eq('id', existing.id);
+        set(state => ({
+          reactions: {
+            ...state.reactions,
+            [messageId]: (state.reactions[messageId] || []).filter(r => r.id !== existing.id)
+          }
+        }));
+      } else {
+        // Add reaction
+        const { data, error } = await supabase
+          .from('message_reactions')
+          .insert({ message_id: messageId, user_id: user.id, emoji })
+          .select()
+          .single();
+        if (!error && data) {
+          set(state => ({
+            reactions: {
+              ...state.reactions,
+              [messageId]: [...(state.reactions[messageId] || []), data as MessageReaction]
+            }
+          }));
+        }
+      }
+    } catch { /* silent */ }
   },
 
   subscribeToMessages: (conversationId: string, onNewMessage?: (message: Message) => void) => {
@@ -278,10 +332,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       }, (payload) => {
         const newMessage = payload.new as Message;
         set(state => {
-          // Avoid duplicates
-          if (state.messages.some(m => m.id === newMessage.id)) {
-            return state;
-          }
+          if (state.messages.some(m => m.id === newMessage.id)) return state;
           return { messages: [...state.messages, newMessage] };
         });
         onNewMessage?.(newMessage);
@@ -289,6 +340,48 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       .subscribe();
 
     set({ subscription: channel });
+  },
+
+  subscribeToReactions: (conversationId: string) => {
+    const messageIds = get().messages.map(m => m.id);
+    if (messageIds.length === 0) return;
+
+    const channel = supabase
+      .channel(`reactions:${conversationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'message_reactions',
+      }, (payload) => {
+        const reaction = payload.new as MessageReaction;
+        set(state => {
+          const current = state.reactions[reaction.message_id] || [];
+          if (current.some(r => r.id === reaction.id)) return state;
+          return {
+            reactions: {
+              ...state.reactions,
+              [reaction.message_id]: [...current, reaction]
+            }
+          };
+        });
+      })
+      .on('postgres_changes', {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'message_reactions',
+      }, (payload) => {
+        const reaction = payload.old as MessageReaction;
+        set(state => ({
+          reactions: {
+            ...state.reactions,
+            [reaction.message_id]: (state.reactions[reaction.message_id] || [])
+              .filter(r => r.id !== reaction.id)
+          }
+        }));
+      })
+      .subscribe();
+
+    set({ reactionSubscription: channel });
   },
 
   subscribeToConversations: (userId: string, onNewConversation?: () => void) => {
@@ -316,11 +409,10 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   },
 
   unsubscribeAll: () => {
-    const { subscription } = get();
-    if (subscription) {
-      supabase.removeChannel(subscription);
-      set({ subscription: null });
-    }
+    const { subscription, reactionSubscription } = get();
+    if (subscription) { supabase.removeChannel(subscription); }
+    if (reactionSubscription) { supabase.removeChannel(reactionSubscription); }
+    set({ subscription: null, reactionSubscription: null });
   },
 
   setCurrentConversation: (conversation) => {
@@ -334,6 +426,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     set({
       conversations: [],
       messages: [],
+      reactions: {},
       currentConversation: null,
       loading: false,
       error: null
